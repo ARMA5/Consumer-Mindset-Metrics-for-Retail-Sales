@@ -1,0 +1,752 @@
+---
+title: "Retail & Marketing Analytics Individual Project: The Use of Consumer Mindset Metrics in Explaining Retail Sales and Guiding Marketing Mix Decisions"
+author: "Adeniyi Richard Michael-Adenuga"
+date: "4/15/2020"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(knitr)
+library(ggplot2)
+library(forecast)
+library("readxl")
+library(readr)
+library(kableExtra)
+library(caret)
+library(car)
+library(broom)
+library(tseries)
+library(vars)
+library(stargazer)
+```
+
+Read-in the dataset:
+```{r}
+#Read in the data
+shampoo<-read_excel(path="/Users/arma/Desktop/shampoo.xlsx", col_names = TRUE)
+```
+
+# Mindset Metrics
+Calculating the potential, stickiness, and responsiveness of the mindset metrics: consideration, liking and awareness. 
+
+## Potential
+```{r}
+consideration_potential<-(100-mean(shampoo$consideration))/100
+awareness_potential<-(100-mean(shampoo$awareness))/100
+
+#We see that liking is on 7-point scale and will therefore need to be transformed
+
+liking_potential<-1-mean(shampoo$liking/7)
+
+#Put results in table
+potential_results<-data.frame(matrix(ncol = 2, nrow = 3))
+colnames(potential_results)<-c("Metric","Potential")
+potential_results$Metric<- c("Consideration","Awareness", "Liking")
+potential_results$Potential<- c(consideration_potential,awareness_potential,liking_potential)
+potential_results %>% kable(caption = "Potential") %>%  kable_styling("striped")
+```
+
+## Stickiness
+```{r}
+
+#Consideration
+ar_consideration<-ar(shampoo$consideration, aic=TRUE)
+ar_consideration
+
+#Check Residuals 
+ggPacf(ar_consideration$resid)
+checkresiduals(ar_consideration) #Ignore the ACF plot
+```
+
+```{r}
+
+#Awareness
+ar_awareness<-ar(shampoo$awareness, aic=TRUE)
+ar_awareness
+
+#Check Residuals 
+ggPacf(ar_awareness$resid)
+checkresiduals(ar_awareness) #Ignore the ACF plot
+```
+
+```{r}
+#Liking
+ar_liking<-ar(shampoo$liking, aic=TRUE)
+ar_liking
+
+#Check Residuals
+ggPacf(ar_liking$resid)
+checkresiduals(ar_liking) #Ignore the ACF plot
+```
+
+The stickiness of mindset metrics are given by summing up their AR coefficients:
+```{r}
+stickiness_consideration<- 0.3028 + 0.3121 + 0.1591
+stickiness_awareness<- 0.4524 + 0.0459 + 0.2660
+stickiness_liking<- 0.4287 + 0.1136 + 0.2224
+
+#Put results in table
+stickiness_results<-data.frame(matrix(ncol = 2, nrow = 3))
+colnames(stickiness_results)<-c("Metric","Stickiness")
+stickiness_results$Metric<- c("Consideration","Awareness", "Liking")
+stickiness_results$Stickiness<- c(stickiness_consideration,stickiness_awareness,stickiness_liking)
+stickiness_results %>% kable(caption = "Stickiness") %>%  kable_styling("striped")
+```
+
+The next section involves fitting models, we begin by creating the required lagged variables
+```{r}
+#Start by getting lagged attidinal metrics
+
+#Awareness
+shampoo$lag_awareness<-lag(shampoo$awareness)
+shampoo$lag_awareness[1]<-0
+
+#Liking
+shampoo$liking_mod<-round((shampoo$liking/7)*100,2) #Change to 100 scale
+shampoo$lag_liking<-lag(shampoo$liking_mod)
+shampoo$lag_liking[1]<-0
+
+#Consideration
+shampoo$lag_consideration<-lag(shampoo$consideration)
+shampoo$lag_consideration[1]<-0
+
+#Sales
+shampoo$lag_sales<-lag(shampoo$sales)
+shampoo$lag_sales[1]<-0
+```
+
+## Do Mindset Metrics Matter in understanding Sales?
+
+We first begin by trying to understand if Mindset Metrics matter in explaining sales. A simple strategy for this is to look at the R^2s for the full model, the model with only marketing mix actions, and that with only 
+
+Only Past Sales:
+```{r}
+#Only Past Sales
+past_sales<- lm(log(shampoo$sales+1) ~ log(shampoo$lag_sales+1), data= shampoo)
+summary(past_sales)
+```
+
+Only Mindset Metrics:
+```{r}
+#Only Mindset Metrics
+mindset_metrics<- lm(log(shampoo$sales+1) ~  log(shampoo$awareness) + log(shampoo$consideration) + log(shampoo$liking_mod), data= shampoo)
+summary(mindset_metrics)
+```
+
+Only Marketing Mix:
+```{r}
+#Only Marketing Mix
+marketing_mix<- lm(log(shampoo$sales+1) ~ log(shampoo$promo+1) + log(shampoo$adv+1), data= shampoo)
+summary(marketing_mix)
+```
+
+```{r}
+#Full Model
+full_model<- lm(log(shampoo$sales+1) ~  log(shampoo$lag_sales+1) +  log(shampoo$promo+1) + log(shampoo$adv+1) + log(shampoo$awareness+1) + log(shampoo$consideration+1) + log(shampoo$liking_mod+1), data= shampoo)
+summary(full_model)
+```
+
+Finally we plot these results:
+```{r}
+#Create a dataframe
+model_results<-data.frame(matrix(ncol = 2, nrow = 4))
+colnames(model_results)<-c("Model","AdjustedR2")
+model_results$Model<- c("Past Sales Only", "Mindset Metrics Only", "Marketing Mix Only", "Full Model")
+model_results$AdjustedR2<-c(0.2172, 0.5047, 0.5678, 0.6724)
+
+model_results<- model_results %>% arrange(AdjustedR2)
+
+#Plot
+model_results %>% ggplot(aes(x=reorder(Model,-AdjustedR2), y=AdjustedR2)) + geom_bar(stat="identity") + theme_bw() +xlab("Model") 
+```
+
+## Responsiveness
+
+### Awareness Responsiveness
+
+Next, the log-log model is estimated:
+```{r}
+#Awareness Responsiveness
+response_awareness<- lm(log(shampoo$awareness+1) ~ log(shampoo$lag_awareness+1)  + log(shampoo$promo+1) + log(shampoo$adv+1), data= shampoo)
+
+#Run Model Diagnostics
+response_awareness.data<- augment(response_awareness) %>% mutate(index = 1:n()) 
+#Multicollinearity
+vif(response_awareness) #Multicollinearity Analyssi, all less than 10
+
+#Influential points
+
+#Decision boundary of Cooks’ Distance > 4/n
+plot_awareness<-response_awareness.data %>% ggplot(aes(y=log(.cooksd), x=as.integer(index))) +geom_point(color="darkgreen", alpha=1, shape=4, stroke=2) +theme_bw() + xlab("Data Index") +ylab("Log Cooks Distance") + geom_hline(yintercept = log(4/(dim(response_awareness.data)[1])), linetype="dashed", color = "black")
+plot_awareness+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+#Filter out influential points
+influential_cooks_awareness<- response_awareness.data %>% filter(abs(.cooksd) > 4/(dim(response_awareness.data)[1])) #Which point(s) are influential
+print(influential_cooks_awareness)
+```
+
+Re-run the model by removing the influential points
+```{r}
+
+#Remove problematic rows
+shampoo_resp_aware<-shampoo[-c(1,19,31,33),]
+
+#New Model
+response_awareness_2<- lm(log(shampoo_resp_aware$awareness+1) ~ log(shampoo_resp_aware$lag_awareness+1) + log(shampoo_resp_aware$promo+1) + log(shampoo_resp_aware$adv+1), data= shampoo_resp_aware)
+
+#Check Residuals
+ggplot(response_awareness_2, aes(x = .fitted, y = .resid)) + geom_point() + xlim(min=2.9, max=3.5)
+```
+
+### Consideration Responsiveness
+```{r}
+#Consideration Responsiveness
+response_consideration<- lm(log(shampoo$consideration+1) ~ log(shampoo$lag_consideration+1) + log(shampoo$promo+1) + log(shampoo$adv+1), data= shampoo)
+
+#Run Model Diagnostics
+response_consideration.data<- augment(response_consideration) %>% mutate(index = 1:n()) 
+
+#Multicollinearity
+vif(response_consideration) #Multicollinearity Analysis, all less than 10
+
+#Influential points
+
+#Decision boundary of Cooks’ Distance > 4/n
+plot_consideration<- response_consideration.data %>% ggplot(aes(y=log(.cooksd), x=as.integer(index))) +geom_point(color="darkgreen", alpha=1, shape=4, stroke=2) +theme_bw() + xlab("Data Index") +ylab("Log Cooks Distance") + geom_hline(yintercept = log(4/(dim(response_consideration.data)[1])), linetype="dashed", color = "black")
+plot_consideration+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+#Filter out influential points
+influential_cooks_consideration<- response_consideration.data %>% filter(abs(.cooksd) > 4/(dim(response_consideration.data)[1])) #Which point(s) are influential
+print(influential_cooks_consideration)
+```
+
+Re-run the model by removing the influential points
+```{r}
+
+#Remove problematic rows
+shampoo_resp_consid<-shampoo[-c(1,19),]
+
+#New Model
+response_consideration_2<- lm(log(shampoo_resp_consid$consideration+1) ~ log(shampoo_resp_consid$lag_consideration+1)  + log(shampoo_resp_consid$promo+1) + log(shampoo_resp_consid$adv+1), data= shampoo_resp_consid)
+
+#Check Residuals
+ggplot(response_consideration_2, aes(x = .fitted, y = .resid)) + geom_point() 
+```
+
+### Liking Responsiveness
+```{r}
+#Liking Responsiveness
+response_liking<-lm(log(shampoo$liking+1) ~ log(shampoo$lag_liking+1) + log(shampoo$promo+1) + log(shampoo$adv+1), data= shampoo)
+
+#Run Model Diagnostics
+response_liking.data<- augment(response_liking) %>% mutate(index = 1:n()) 
+
+#Multicollinearity
+vif(response_liking) #Multicollinearity Analysis, all less than 10
+
+#Influential points
+
+#Decision boundary of Cooks’ Distance > 4/n
+plot_liking<-response_liking.data %>% ggplot(aes(y=log(.cooksd), x=as.integer(index))) +geom_point(color="darkgreen", alpha=1, shape=4, stroke=2) +theme_bw() + xlab("Data Index") +ylab("Log Cooks Distance") + geom_hline(yintercept = log(4/(dim(response_liking.data)[1])), linetype="dashed", color = "black")
+plot_liking+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+#Filter out influential points
+influential_cooks_liking<- response_liking.data %>% filter(abs(.cooksd) > 4/(dim(response_liking.data)[1])) #Which point(s) are influential
+print(influential_cooks_liking)
+```
+
+Re-run the model by removing the influential points
+```{r}
+#Remove problematic rows
+shampoo_resp_liking<-shampoo[-c(1,19,24),]
+
+#New Model
+response_liking_2<- lm(log(shampoo_resp_liking$liking+1) ~ log(shampoo_resp_liking$lag_liking+1) + log(shampoo_resp_liking$promo+1) + log(shampoo_resp_liking$adv+1), data= shampoo_resp_liking)
+
+#Check Residuals
+ggplot(response_liking_2, aes(x = .fitted, y = .resid)) + geom_point() 
+```
+### Sales Responsiveness
+```{r}
+#Liking Responsiveness
+response_sales<-lm(log(shampoo$sales+1) ~ log(shampoo$lag_sales+1) + log(shampoo$promo+1) + log(shampoo$adv+1), data= shampoo)
+
+#Run Model Diagnostics
+response_sales.data<- augment(response_sales) %>% mutate(index = 1:n()) 
+
+#Multicollinearity
+vif(response_sales) #Multicollinearity Analysis, all less than 10
+
+#Influential points
+
+#Decision boundary of Cooks’ Distance > 4/n
+plot_sales<-response_sales.data %>% ggplot(aes(y=log(.cooksd), x=as.integer(index))) +geom_point(color="darkgreen", alpha=1, shape=4, stroke=2) +theme_bw() + xlab("Data Index") +ylab("Log Cooks Distance") + geom_hline(yintercept = log(4/(dim(response_sales.data)[1])), linetype="dashed", color = "black")
+plot_sales+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+#Filter out influential points
+influential_cooks_sales<- response_sales.data %>% filter(abs(.cooksd) > 4/(dim(response_sales.data)[1])) #Which point(s) are influential
+print(influential_cooks_sales)
+```
+Re-run the model by removing the influential points
+```{r}
+#Remove problematic rows
+shampoo_resp_sales<-shampoo[-c(1,19,75),]
+
+#New Model
+response_sales_2<- lm(log(shampoo_resp_sales$sales+1) ~ log(shampoo_resp_sales$lag_sales+1) + log(shampoo_resp_liking$promo+1) + log(shampoo_resp_liking$adv+1), data= shampoo_resp_sales)
+
+#Check Residuals
+ggplot(response_sales_2, aes(x = .fitted, y = .resid)) + geom_point() 
+```
+
+## Conversion
+```{r}
+conversion<- lm(log(shampoo$sales+1) ~ log(shampoo$lag_sales+1) + log(shampoo$awareness+1) + log(shampoo$consideration+1) + log(shampoo$liking_mod+1), data= shampoo)
+
+#Run Model Diagnostics
+conversion.data<- augment(conversion) %>% mutate(index = 1:n()) 
+
+#Multicollinearity
+vif(conversion) #Multicollinearity Analysis, all less than 10
+
+#Influential points
+
+#Decision boundary of Cooks’ Distance > 4/n
+plot_conversion<-conversion.data %>% ggplot(aes(y=log(.cooksd), x=as.integer(index))) +geom_point(color="darkgreen", alpha=1, shape=4, stroke=2) +theme_bw() + xlab("Data Index") +ylab("Log Cooks Distance") + geom_hline(yintercept = log(4/(dim(conversion.data)[1])), linetype="dashed", color = "black")
+
+plot_conversion+ theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+#Filter out influential points
+influential_cooks_conversion<- conversion.data %>% filter(abs(.cooksd) > 4/(dim(conversion.data)[1])) #Which point(s) are influential
+print(influential_cooks_conversion)
+```
+
+Re-run the model by removing the influential points
+```{r}
+#Remove problematic rows
+shampoo_conversion<-shampoo[-c(1,5,43,70,71),]
+
+#Re-run model
+conversion_mod2 <- lm(log(shampoo_conversion$sales+1) ~ log(shampoo_conversion$lag_sales+1) + log(shampoo_conversion$awareness+1) + log(shampoo_conversion$consideration+1) + log(shampoo_conversion$liking_mod+1), data= shampoo_conversion)
+
+#Check Residuals
+ggplot(conversion_mod2, aes(x = .fitted, y = .resid)) + geom_point() 
+
+#Summarise Output
+summary(conversion_mod2)
+```
+
+Summarise all regression results:
+```{r}
+summary(response_awareness_2)
+```
+
+```{r}
+summary(response_consideration_2)
+```
+
+```{r}
+summary(response_liking_2)
+```
+
+```{r}
+summary(response_sales_2)
+```
+
+```{r}
+summary(conversion_mod2)
+```
+
+Put all the data from the Potential, Stickiness, Responsiveness and Conversion criteria in a table:
+```{r}
+results_summary<- data.frame(matrix(ncol = 4, nrow = 6))
+colnames(results_summary) <- c("Item", "Awareness", "Consideration", "Liking")
+results_summary$Item<- c("Beginning Level", "Potential", "Stickiness", "Responsiveness to Adv", "Responsiveness to Promo", "Conversion")
+results_summary$Awareness<- c(0.2747, 0.7252, 0.7643, 0.037366, 0.0128, 0.44230)
+results_summary$Consideration<- c(0.17479,0.8252,0.7740,0.018085,0.049085,0.33740)
+results_summary$Liking<- c(0.7369,0.2631,0.7647,0.001863,0.012020,0.19494)
+
+results_summary %>% kable(caption = "Results Summary") %>%  kable_styling("striped")
+```
+
+## Appeal
+```{r}
+
+#Awareness
+LR_impact_awareness_adv<- (results_summary[2,2]) * (results_summary[4,2]) * 1/(1-(results_summary[3,2]))
+LR_impact_awareness_prom<- (results_summary[2,2]) * (results_summary[5,2]) * 1/(1-(results_summary[3,2]))
+
+#Consideration
+LR_impact_consideration_adv<- (results_summary[2,3]) * (results_summary[4,3]) * 1/(1-(results_summary[3,3]))
+LR_impact_consideration_prom<- (results_summary[2,3]) * (results_summary[5,3]) * 1/(1-(results_summary[3,3]))
+
+#Liking
+LR_impact_liking_adv<- (results_summary[2,4]) * (results_summary[4,4]) * 1/(1-(results_summary[3,4]))
+LR_impact_liking_prom<- (results_summary[2,4]) * (results_summary[5,4]) * 1/(1-(results_summary[3,4]))
+
+#Appeal - Advertising
+appeal_adv_awareness<- LR_impact_awareness_adv * results_summary[6,2]
+appeal_adv_consideration <- LR_impact_consideration_adv * results_summary[6,3]
+appeal_adv_liking <- LR_impact_liking_adv * results_summary[6,4]
+appeal_adv_total <- appeal_adv_awareness + appeal_adv_consideration + appeal_adv_liking
+
+#Appeal - Promotion
+appeal_prom_awareness <- LR_impact_awareness_prom * results_summary[6,2]
+appeal_prom_consideration <- LR_impact_consideration_prom * results_summary[6,3]
+appeal_prom_liking <- LR_impact_liking_prom * results_summary[6,4]
+appeal_prom_total<- appeal_prom_awareness + appeal_prom_consideration + appeal_prom_liking
+
+print(appeal_adv_total)
+print(appeal_prom_total)
+```
+```{r}
+# Put Appeal Results in a Table
+appeal_summary_table<- data.frame(matrix(ncol=5, nrow=2))
+colnames(appeal_summary_table) <- c("Item","Awareness", "Consideration", "Liking", "Total")
+appeal_summary_table$Item<- c("Advertising Appeal", "Promotion Appeal")
+appeal_summary_table$Awareness<-c(appeal_adv_awareness, appeal_prom_awareness)
+appeal_summary_table$Consideration<-c(appeal_adv_consideration,appeal_prom_consideration)
+appeal_summary_table$Liking <- c(appeal_adv_liking, appeal_prom_liking)
+appeal_summary_table$Total <- c(appeal_adv_total,appeal_prom_total)
+
+appeal_summary_table %>% kable(caption = "Appeal Summary") %>% kable_styling("striped")
+
+```
+
+# Scenario Analysis 
+
+Looking at the long run impact of changes to the marketing expenditure on sales and then decompose the effects via the mindset and transaction pathway. Run chnages to Advertising and Promotion independently. 
+
+```{r}
+#Changes to advertising budget only
+
+#Create table to hold the results
+
+scenario_adv<-data.frame(matrix(ncol = 6, nrow = 6))
+colnames(scenario_adv) <- c("Item", "Start", "New", "Gain", "Long Run Gain", "Conversion")
+scenario_adv$Item<- c("Advertising", "Promotion", "Awareness", "Consideration", "Liking", "Sales")
+scenario_adv$Start<- c(mean(shampoo$adv), mean(shampoo$promo), mean(shampoo$awareness)/100, mean(shampoo$consideration)/100, mean(shampoo$liking_mod)/100, mean(shampoo$sales))
+
+#What is the impact of doubling advertising expenditure, while keeping promotion the same?
+adv_multiplier <- 2
+scenario_adv$New[1]<- adv_multiplier * scenario_adv$Start[1]
+scenario_adv$New[2]<- scenario_adv$Start[2]
+
+#New Values
+resp_sales_adv <- 0.04310   #Sales Responsiveness to Advertising 
+scenario_adv$New[3] <- scenario_adv$Start[3]*(adv_multiplier)^(results_summary$Awareness[4])
+scenario_adv$New[4] <- scenario_adv$Start[4]*(adv_multiplier)^(results_summary$Consideration[4])
+scenario_adv$New[5] <- scenario_adv$Start[5]*(adv_multiplier)^(results_summary$Liking[4])
+scenario_adv$New[6] <- scenario_adv$Start[6]*(adv_multiplier)^(resp_sales_adv)
+```
+
+Find short run gains next:
+```{r}
+scenario_adv$Gain[3]<-(scenario_adv$New[3]/scenario_adv$Start[3])-1
+scenario_adv$Gain[4]<-(scenario_adv$New[4]/scenario_adv$Start[4])-1
+scenario_adv$Gain[5]<-(scenario_adv$New[5]/scenario_adv$Start[5])-1
+scenario_adv$Gain[6]<-(scenario_adv$New[6]/scenario_adv$Start[6])-1
+```
+
+Find long run gains next:
+```{r}
+gamma_awareness<- 0.375759
+gamma_consideration<- 0.410654
+gamma_liking<- 0.365799
+gamma_sales<- 0.64147
+
+scenario_adv$`Long Run Gain`[3]<-scenario_adv$Gain[3]/(1-gamma_awareness)
+scenario_adv$`Long Run Gain`[4]<-scenario_adv$Gain[4]/(1-gamma_consideration)
+scenario_adv$`Long Run Gain`[5]<-scenario_adv$Gain[5]/(1-gamma_liking)
+scenario_adv$`Long Run Gain`[6]<-scenario_adv$Gain[6]/(1-gamma_sales)
+```
+
+Find effect on conversation:
+```{r}
+scenario_adv$Conversion[3] <- scenario_adv$`Long Run Gain`[3] * results_summary$Awareness[6]
+scenario_adv$Conversion[4] <- scenario_adv$`Long Run Gain`[4] * results_summary$Consideration[6]
+scenario_adv$Conversion[5] <- scenario_adv$`Long Run Gain`[5] * results_summary$Liking[6]
+```
+
+Next we perform the scenario analysis on promotion:
+```{r}
+#Changes to promotion budget only
+
+#Create table to hold the results
+
+scenario_prom<-data.frame(matrix(ncol = 6, nrow = 6))
+colnames(scenario_prom) <- c("Item", "Start", "New", "Gain", "Long Run Gain", "Conversion")
+scenario_prom$Item<- c("Advertising", "Promotion", "Awareness", "Consideration", "Liking", "Sales")
+scenario_prom$Start<- c(mean(shampoo$adv), mean(shampoo$promo), mean(shampoo$awareness)/100, mean(shampoo$consideration)/100, mean(shampoo$liking_mod)/100, mean(shampoo$sales))
+
+#What is the impact of five-folding promotion expenditure, while keeping advertising the same?
+prom_multiplier <- 5
+scenario_prom$New[2]<- prom_multiplier * scenario_prom$Start[2]
+scenario_prom$New[1]<- scenario_prom$Start[1]
+
+#New Values
+resp_sales_prom <- 0.10939   #Sales Responsiveness to Advertising 
+scenario_prom$New[3] <- scenario_prom$Start[3]*(prom_multiplier)^(results_summary$Awareness[5])
+scenario_prom$New[4] <- scenario_prom$Start[4]*(prom_multiplier)^(results_summary$Consideration[5])
+scenario_prom$New[5] <- scenario_prom$Start[5]*(prom_multiplier)^(results_summary$Liking[5])
+scenario_prom$New[6] <- scenario_prom$Start[6]*(prom_multiplier)^(resp_sales_prom)
+```
+
+Find short run gains next:
+```{r}
+scenario_prom$Gain[3]<-(scenario_prom$New[3]/scenario_prom$Start[3])-1
+scenario_prom$Gain[4]<-(scenario_prom$New[4]/scenario_prom$Start[4])-1
+scenario_prom$Gain[5]<-(scenario_prom$New[5]/scenario_prom$Start[5])-1
+scenario_prom$Gain[6]<-(scenario_prom$New[6]/scenario_prom$Start[6])-1
+```
+
+Find long run gains next:
+```{r}
+gamma_awareness<- 0.375759
+gamma_consideration<- 0.410654
+gamma_liking<- 0.365799
+gamma_sales<- 0.64147
+
+scenario_prom$`Long Run Gain`[3]<-scenario_prom$Gain[3]/(1-gamma_awareness)
+scenario_prom$`Long Run Gain`[4]<-scenario_prom$Gain[4]/(1-gamma_consideration)
+scenario_prom$`Long Run Gain`[5]<-scenario_prom$Gain[5]/(1-gamma_liking)
+scenario_prom$`Long Run Gain`[6]<-scenario_prom$Gain[6]/(1-gamma_sales)
+```
+
+Find effect on conversation:
+```{r}
+scenario_prom$Conversion[3] <- scenario_prom$`Long Run Gain`[3] * results_summary$Awareness[6]
+scenario_prom$Conversion[4] <- scenario_prom$`Long Run Gain`[4] * results_summary$Consideration[6]
+scenario_prom$Conversion[5] <- scenario_prom$`Long Run Gain`[5] * results_summary$Liking[6]
+```
+
+# Finding Optimal Budget Allocation between Promotion and Advertising
+
+
+Begin by plotting the data
+```{r}
+
+#Consideration
+ts.plot(shampoo$consideration, col="blue", main="consideration") 
+
+#Advertising
+ts.plot(shampoo$adv, col="darkgreen", main="Advertising") 
+
+#Promotion
+ts.plot(shampoo$promo, col="red", main="Promotion") 
+```
+We see that there is a trend in Consideration, Advertising and Promotion. We also notice that the rise in consideration that commences at around week 30 coincides with a rise in advertising spending around week 35 and promotion at week 40.
+
+We observe PACF and ACF plots also:
+
+```{r}
+#Consideration
+consideration_ts<- ts(shampoo$consideration, frequency = 4, start = c(1,1))
+ggtsdisplay(consideration_ts)
+```
+
+```{r}
+#Promotion
+promotion_ts<- ts(shampoo$promo, frequency = 4, start = c(1,1))
+ggtsdisplay(promotion_ts)
+```
+
+```{r}
+#Advertising
+advert_ts<- ts(shampoo$adv, frequency = 4, start = c(1,1))
+ggtsdisplay(advert_ts)
+```
+
+
+Next, we take logs of each of the variables 
+```{r}
+#Create Logs
+Log_consideration<- log(shampoo$consideration +1)  #Log consideration for brand 1 
+Log_promotion<- log(shampoo$promo +1) #Log promotion for brand 1
+Log_advert<- log(shampoo$adv +1)  #Log advertising brand 1
+
+#Create ts objects
+lconsideration<- ts(Log_consideration, frequency = 4, start=c(1,1))
+lpromotion<-ts(Log_promotion, frequency=4, start= c(1,1))
+ladvert<-ts(Log_advert, frequency = 4, start= c(1,1))
+
+```
+
+### Unit Root Testing
+The test for stationarity can be performed formally using the ADF test.
+
+```{r}
+adf.test(lconsideration)
+```
+
+```{r}
+adf.test(ladvert)
+```
+
+```{r}
+adf.test(lpromotion)
+```
+
+We see that the null cannot be rejected in the case of promotion. However, the null is rejected in the case of Advertisement and Consideratio even though they show a trend. In this case, a difference will still be taken.
+
+```{r}
+diff_lpromotion<- diff(lpromotion, differences = 1)
+
+adf.test(diff_lpromotion)
+```
+```{r}
+diff_lconsideration<- diff(lconsideration, differences = 1)
+
+adf.test(diff_lconsideration)
+```
+
+```{r}
+diff_ladvert<- diff(ladvert, differences = 1)
+
+adf.test(diff_ladvert)
+```
+
+All differenced series are stationary.
+
+### VAR Model
+```{r}
+data_ts<- window(cbind(diff_ladvert, diff_lpromotion, diff_lconsideration), start= c(1,2))
+```
+
+We take Promtoion, Advertising and Consideration as endogenous varaibles and the VAR model is estimated as follows:
+```{r}
+var<- VAR(data_ts, ic="AIC", lag.max=1, type="const")
+
+var_results<- var$varresult
+
+stargazer(var_results$diff_ladvert, var_results$diff_lpromotion, var_results$diff_lconsideration, column.labels=c('DiffLogAd', 'DiffLogPromotion', 'DiffLogConsideration'), type= 'text', dep.var.labels.include = FALSE)
+```
+
+Check the residuals:
+```{r}
+consideration_residuals <- data.frame(residuals(var))$diff_lconsideration
+consideration_residuals<- ts(consideration_residuals, frequency = 4, start = c(1, 1))
+round(mean(consideration_residuals),4)
+```
+
+```{r}
+autoplot(consideration_residuals)
+```
+
+### IRF Analysis
+```{r}
+
+irfs<-irf(var, impulse = c('diff_ladvert','diff_lpromotion'), response = "diff_lconsideration", runs =100, n.ahead=9, ortho=TRUE, ci=0.95)
+
+plot(irfs)
+```
+
+### Immediate and Long-Term Effects
+```{r}
+#Table to Summarise IRF coefficients and their confidence intervals
+
+irf_table_ci<- round(data.frame(period=seq(1,10), response.Advertising=irfs$irf$diff_ladvert, Advertising.lower=irfs$Lower$diff_ladvert, Advertising.upper=irfs$Upper$diff_ladvert, response.Promotion=irfs$irf$diff_lpromotion, Promotion.lower=irfs$Lower$diff_lpromotion, Promotion.upper=irfs$Upper$diff_lpromotion),4)
+
+colnames(irf_table_ci) <- c('Period', 'Advertising', 'Advertising Lower', 'Advertising Upper', 'Promotion', ' Promotion Lower', 'Promotion Upper')
+
+knitr::kable(irf_table_ci)
+```
+Apply the t>1 criterion to determine coefficient significance and calculate long-term elasticities of Advertising and Promotion spending:
+
+```{r}
+#Advertising 
+
+result_irf_adv<-matrix(nrow = 10, ncol = 1)
+
+for (i in 1:10) {
+  se_adv <- (irfs$Upper$diff_ladvert[i]-irfs$Lower$diff_ladvert[i])/(2*1.96)
+  t_irf_adv<- irfs$irf$diff_ladvert[i]/se_adv
+   
+   if (t_irf_adv>1) {
+    result_irf_adv[i] <- irfs$irf$diff_ladvert[i]
+   } else {
+      result_irf_adv[i] <-0
+      }
+}
+
+result_irf_adv #print out the results
+```
+```{r}
+#Promotion
+
+result_irf_prom<-matrix(nrow = 10, ncol = 1)
+
+for (i in 1:10) {
+  se_prom <- (irfs$Upper$diff_lpromotion[i]-irfs$Lower$diff_lpromotion[i])/(2*1.96)
+  t_irf_prom<- irfs$irf$diff_lpromotion[i]/se_prom
+   
+   if (t_irf_prom>1) {
+    result_irf_prom[i] <- irfs$irf$diff_lpromotion[i]
+   } else {
+      result_irf_prom[i] <-0
+      }
+}
+
+result_irf_prom #print out the results
+```
+
+## Current Budget Allocation for Marketing VS Optimal
+
+```{r}
+#Current budget allocation
+
+cost_adv<-sum(shampoo$adv)
+cost_promo<-sum(shampoo$promo)
+cost_total <- cost_adv + cost_promo
+
+costshare_adv<-cost_adv/cost_total
+costshare_promo<-cost_promo/cost_total
+```
+
+Visualise with pie chart:
+```{r}
+slices_actual<-c(costshare_adv, costshare_promo )
+lbls_actual<-c("Advertising", "Promotions")
+pct_actual<-round(slices_actual*100)
+lbls_actual<-paste(lbls_actual, pct_actual)          # add data to labels
+lbls_actual<-paste(lbls_actual, "%", sep="")  # add % sign to labels
+
+# Get the pie-chart
+pie(slices_actual, labels=lbls_actual, col=rainbow(length(lbls_actual)), main="Actual Budget Allocation" )
+```
+
+```{r}
+#Optimal Budget
+
+lr_adv<- sum(result_irf_adv)
+lr_prom <- sum(result_irf_prom)
+
+#Get the coefficients from IRF results
+beta_adv<- lr_adv
+beta_prom <- lr_prom
+
+#The sum of all elasticities 
+beta_all<-beta_adv+beta_prom
+
+#Optimal allocation
+optim_adv<-beta_adv/beta_all
+optim_prom<-beta_prom/beta_all
+
+#Build Pie Chart
+optimal_spend<- c(optim_adv, optim_prom)
+optimal_spend=round(optimal_spend, digits=5)
+
+
+slices_optim<-c(optim_adv, optim_prom)
+lbls_optim<-c("Advertising", "Promotion")
+pct_optim<-round(slices_optim*100)
+lbls_optim<-paste(lbls_optim, pct_optim)   # paste variable names to data labels 
+lbls_optim<-paste(lbls_optim, "%", sep="") # add % sign to labels
+
+# Get the pie-chart
+pie(slices_optim, labels=lbls_optim, col=rainbow(length(lbls_optim)), main="Optimal Budget Allocation" )
+```
+
+
